@@ -455,3 +455,48 @@ export function clientSse(api: 'openai' | 'anthropic', model: string, answer: Pr
   );
   return frames.join('');
 }
+
+// ── Upstream Execution with Timeout and Error Handling ──────────────────────
+
+export const DEFAULT_UPSTREAM_TIMEOUT_MS = 10000;
+
+export interface UpstreamResult {
+  ok: boolean;
+  response?: Response;
+  error?: string;
+  isTimeout?: boolean;
+}
+
+/**
+ * Execute an upstream provider request with timeout and error classification.
+ */
+export async function executeUpstream(
+  envUrl: string,
+  provider: ProviderEntry,
+  model: string,
+  clientApi: 'openai' | 'anthropic',
+  clientBody: Json,
+  timeoutMs = DEFAULT_UPSTREAM_TIMEOUT_MS,
+): Promise<UpstreamResult> {
+  const url = providerUrl(envUrl, provider, model);
+  const headers = providerHeaders(provider);
+  const reqBody = JSON.stringify(requestFor(provider.wire, clientApi, clientBody, model));
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: reqBody,
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    return { ok: true, response: res };
+  } catch (err) {
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    const isTimeout = err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError');
+    return {
+      ok: false,
+      error: errorMsg,
+      isTimeout,
+    };
+  }
+}
+

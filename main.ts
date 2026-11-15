@@ -38,6 +38,7 @@ import {
   answerOf,
   clientJson,
   clientSse,
+  executeUpstream,
   providerHeaders,
   providerUrl,
   requestFor,
@@ -260,17 +261,15 @@ async function serve(api: 'openai' | 'anthropic', body: Json, res: ServerRespons
     if (route.probe.provider.wire === 'anthropic' && needsJson) continue;
 
     const model = route.model.id;
-    let upstream: Response;
-    try {
-      upstream = await fetch(providerUrl(ENV_URL, route.probe.provider, model), {
-        method: 'POST',
-        headers: providerHeaders(route.probe.provider),
-        body: JSON.stringify(requestFor(route.probe.provider.wire, api, body, model)),
-      });
-    } catch (err) {
-      log(`failover ${route.probe.provider.id}/${model}: ${(err as Error).message}`);
+    const upstreamRes = await executeUpstream(ENV_URL, route.probe.provider, model, api, body);
+    if (!upstreamRes.ok || !upstreamRes.response) {
+      log(`failover ${route.probe.provider.id}/${model}: ${upstreamRes.error ?? 'unknown network error'}`);
+      if (upstreamRes.isTimeout) {
+        recordFailure(route, { status: 504, code: 'timeout', message: 'upstream request timed out', retryAfter: 0 });
+      }
       continue;
     }
+    const upstream = upstreamRes.response;
 
     if (!upstream.ok) {
       const fail = parseFailure(upstream.status, upstream.headers.get('retry-after'), await upstream.text());
